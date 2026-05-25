@@ -166,7 +166,7 @@ def process_file(positions, feet_thre):
     def get_cont6d_params(positions):
         skel = Skeleton(n_raw_offsets, kinematic_chain, "cpu")
         # (seq_len, joints_num, 4)
-        quat_params = skel.inverse_kinematics_np(positions, face_joint_indx, smooth_forward=True)
+        quat_params = skel.inverse_kinematics_np(positions, face_joint_indx, smooth_forward=False)
 
         '''Quaternion to continuous 6D'''
         cont_6d_params = quaternion_to_cont6d_np(quat_params)
