@@ -78,7 +78,10 @@ class Skeleton(object):
         # print(joints.shape[:-1])
         quat_params = np.zeros(joints.shape[:-1] + (4,))
         # print(quat_params.shape)
-        root_quat[0] = np.array([[1.0, 0.0, 0.0, 0.0]])
+        # NOTE (v2-bugfix B7): upstream had `root_quat[0] = identity` here which made
+        # frame 0's per-joint quats end up in world frame while frame 1+ are in canonical
+        # frame (inconsistent reference frames). We use the actual computed root_quat[0]
+        # from above so all frames are consistently in canonical frame.
         quat_params[:, 0] = root_quat
         # quat_params[0, 0] = np.array([[1.0, 0.0, 0.0, 0.0]])
         for chain in self._kinematic_tree:
