@@ -11,6 +11,7 @@ import torch
 import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
+from scipy.signal import resample_poly
 from tqdm import tqdm
 
 
@@ -94,12 +95,14 @@ def amass_to_pose(src_path, save_path):
         bm = female_bm
     else:
         bm = neutral_bm
-    down_sample = int(fps / ex_fps)
 #     print(frame_number)
 #     print(fps)
 
-    source_bdata_poses = bdata['motion_source']['poses'][::down_sample,...]
-    source_bdata_trans = bdata['motion_source']['trans'][::down_sample,...]
+    # v2-bugfix B2: replaced int(fps/ex_fps) stride approach with polyphase
+    # resampling. Upstream's `down_sample = int(30/20) = 1` kept all frames
+    # at 30 fps; MotionLab expects 20 fps (HumanML3D convention).
+    source_bdata_poses = resample_poly(bdata['motion_source']['poses'], up=2, down=3, axis=0)
+    source_bdata_trans = resample_poly(bdata['motion_source']['trans'], up=2, down=3, axis=0)
     source_body_parms = {
             'root_orient': torch.Tensor(source_bdata_poses[:, :3]).to(comp_device),
             'pose_body': torch.Tensor(source_bdata_poses[:, 3:66]).to(comp_device),
@@ -120,8 +123,8 @@ def amass_to_pose(src_path, save_path):
     source_pose_seq_np_n = np.dot(source_pose_seq_np, trans_matrix)
     source_pose_seq_np_n[..., 0] *= -1
     
-    target_bdata_poses = bdata['motion_target']['poses'][::down_sample,...]
-    target_bdata_trans = bdata['motion_target']['trans'][::down_sample,...]
+    target_bdata_poses = resample_poly(bdata['motion_target']['poses'], up=2, down=3, axis=0)
+    target_bdata_trans = resample_poly(bdata['motion_target']['trans'], up=2, down=3, axis=0)
     target_body_parms = {
             'root_orient': torch.Tensor(target_bdata_poses[:, :3]).to(comp_device),
             'pose_body': torch.Tensor(target_bdata_poses[:, 3:66]).to(comp_device),
