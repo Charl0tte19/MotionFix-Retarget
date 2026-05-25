@@ -84,8 +84,23 @@ class Skeleton(object):
         # from above so all frames are consistently in canonical frame.
         quat_params[:, 0] = root_quat
         # quat_params[0, 0] = np.array([[1.0, 0.0, 0.0, 0.0]])
+        # NOTE (v2-bugfix B3): per-joint accumulated rotation cache so that
+        # chains starting at a non-zero joint (arms start at joint 9 = spine3)
+        # seed R from the accumulated rotation along the parent chain rather
+        # than from root_quat. Upstream re-initialized R = root_quat at every
+        # chain start, which ignores spine rotation and contaminates the
+        # collar local quats (joints 13/14). Ref: GitHub issue #119.
+        saved_R = {}  # joint_idx -> accumulated R at that joint, shape (T, 4)
         for chain in self._kinematic_tree:
-            R = root_quat
+            if chain[0] == 0:
+                R = root_quat
+            else:
+                assert chain[0] in saved_R, (
+                    f"v2-bugfix B3: chain starting at joint {chain[0]} requires it "
+                    f"to be visited by an earlier chain. Check kinematic_tree ordering."
+                )
+                R = saved_R[chain[0]]
+            saved_R[chain[0]] = R
             for j in range(len(chain) - 1):
                 # (batch, 3)
                 u = self._raw_offset_np[chain[j+1]][np.newaxis,...].repeat(len(joints), axis=0)
@@ -100,6 +115,7 @@ class Skeleton(object):
 
                 quat_params[:,chain[j + 1], :] = R_loc
                 R = qmul_np(R, R_loc)
+                saved_R[chain[j + 1]] = R
 
         return quat_params
 
@@ -114,15 +130,26 @@ class Skeleton(object):
             offsets = self._offset.expand(quat_params.shape[0], -1, -1)
         joints = torch.zeros(quat_params.shape[:-1] + (3,)).to(self.device)
         joints[:, 0] = root_pos
+        # NOTE (v2-bugfix B3): see inverse_kinematics_np for rationale.
+        saved_R = {}
         for chain in self._kinematic_tree:
-            if do_root_R:
-                R = quat_params[:, 0]
+            if chain[0] == 0:
+                if do_root_R:
+                    R = quat_params[:, 0]
+                else:
+                    R = torch.tensor([[1.0, 0.0, 0.0, 0.0]]).expand(len(quat_params), -1).detach().to(self.device)
             else:
-                R = torch.tensor([[1.0, 0.0, 0.0, 0.0]]).expand(len(quat_params), -1).detach().to(self.device)
+                assert chain[0] in saved_R, (
+                    f"v2-bugfix B3: chain starting at joint {chain[0]} requires it "
+                    f"to be visited by an earlier chain. Check kinematic_tree ordering."
+                )
+                R = saved_R[chain[0]]
+            saved_R[chain[0]] = R
             for i in range(1, len(chain)):
                 R = qmul(R, quat_params[:, chain[i]])
                 offset_vec = offsets[:, chain[i]]
                 joints[:, chain[i]] = qrot(R, offset_vec) + joints[:, chain[i-1]]
+                saved_R[chain[i]] = R
         return joints
 
     # Be sure root joint is at the beginning of kinematic chains
@@ -138,15 +165,26 @@ class Skeleton(object):
         offsets = offsets.numpy()
         joints = np.zeros(quat_params.shape[:-1] + (3,))
         joints[:, 0] = root_pos
+        # NOTE (v2-bugfix B3): see inverse_kinematics_np for rationale.
+        saved_R = {}
         for chain in self._kinematic_tree:
-            if do_root_R:
-                R = quat_params[:, 0]
+            if chain[0] == 0:
+                if do_root_R:
+                    R = quat_params[:, 0]
+                else:
+                    R = np.array([[1.0, 0.0, 0.0, 0.0]]).repeat(len(quat_params), axis=0)
             else:
-                R = np.array([[1.0, 0.0, 0.0, 0.0]]).repeat(len(quat_params), axis=0)
+                assert chain[0] in saved_R, (
+                    f"v2-bugfix B3: chain starting at joint {chain[0]} requires it "
+                    f"to be visited by an earlier chain. Check kinematic_tree ordering."
+                )
+                R = saved_R[chain[0]]
+            saved_R[chain[0]] = R
             for i in range(1, len(chain)):
                 R = qmul_np(R, quat_params[:, chain[i]])
                 offset_vec = offsets[:, chain[i]]
                 joints[:, chain[i]] = qrot_np(R, offset_vec) + joints[:, chain[i - 1]]
+                saved_R[chain[i]] = R
         return joints
 
     def forward_kinematics_cont6d_np(self, cont6d_params, root_pos, skel_joints=None, do_root_R=True):
@@ -161,16 +199,27 @@ class Skeleton(object):
         offsets = offsets.numpy()
         joints = np.zeros(cont6d_params.shape[:-1] + (3,))
         joints[:, 0] = root_pos
+        # NOTE (v2-bugfix B3): see inverse_kinematics_np for rationale.
+        saved_R = {}
         for chain in self._kinematic_tree:
-            if do_root_R:
-                matR = cont6d_to_matrix_np(cont6d_params[:, 0])
+            if chain[0] == 0:
+                if do_root_R:
+                    matR = cont6d_to_matrix_np(cont6d_params[:, 0])
+                else:
+                    matR = np.eye(3)[np.newaxis, :].repeat(len(cont6d_params), axis=0)
             else:
-                matR = np.eye(3)[np.newaxis, :].repeat(len(cont6d_params), axis=0)
+                assert chain[0] in saved_R, (
+                    f"v2-bugfix B3: chain starting at joint {chain[0]} requires it "
+                    f"to be visited by an earlier chain. Check kinematic_tree ordering."
+                )
+                matR = saved_R[chain[0]]
+            saved_R[chain[0]] = matR
             for i in range(1, len(chain)):
                 matR = np.matmul(matR, cont6d_to_matrix_np(cont6d_params[:, chain[i]]))
                 offset_vec = offsets[:, chain[i]][..., np.newaxis]
                 # print(matR.shape, offset_vec.shape)
                 joints[:, chain[i]] = np.matmul(matR, offset_vec).squeeze(-1) + joints[:, chain[i-1]]
+                saved_R[chain[i]] = matR
         return joints
 
     def forward_kinematics_cont6d(self, cont6d_params, root_pos, skel_joints=None, do_root_R=True):
@@ -184,16 +233,27 @@ class Skeleton(object):
             offsets = self._offset.expand(cont6d_params.shape[0], -1, -1)
         joints = torch.zeros(cont6d_params.shape[:-1] + (3,)).to(cont6d_params.device)
         joints[..., 0, :] = root_pos
+        # NOTE (v2-bugfix B3): see inverse_kinematics_np for rationale.
+        saved_R = {}
         for chain in self._kinematic_tree:
-            if do_root_R:
-                matR = cont6d_to_matrix(cont6d_params[:, 0])
+            if chain[0] == 0:
+                if do_root_R:
+                    matR = cont6d_to_matrix(cont6d_params[:, 0])
+                else:
+                    matR = torch.eye(3).expand((len(cont6d_params), -1, -1)).detach().to(cont6d_params.device)
             else:
-                matR = torch.eye(3).expand((len(cont6d_params), -1, -1)).detach().to(cont6d_params.device)
+                assert chain[0] in saved_R, (
+                    f"v2-bugfix B3: chain starting at joint {chain[0]} requires it "
+                    f"to be visited by an earlier chain. Check kinematic_tree ordering."
+                )
+                matR = saved_R[chain[0]]
+            saved_R[chain[0]] = matR
             for i in range(1, len(chain)):
                 matR = torch.matmul(matR, cont6d_to_matrix(cont6d_params[:, chain[i]]))
                 offset_vec = offsets[:, chain[i]].unsqueeze(-1)
                 # print(matR.shape, offset_vec.shape)
                 joints[:, chain[i]] = torch.matmul(matR, offset_vec).squeeze(-1) + joints[:, chain[i-1]]
+                saved_R[chain[i]] = matR
         return joints
 
 
