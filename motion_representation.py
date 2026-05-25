@@ -205,6 +205,11 @@ def process_file(positions, feet_thre):
     '''Root rotation and linear velocity'''
     # (seq_len-1, 1) rotation velocity along y-axis
     # (seq_len-1, 2) linear velovity on xz plane
+    # v2-bugfix B1: regulate quaternion to w>=0 before arcsin extraction.
+    # qmul_np can return either antipodal form (w, ...) or (-w, -...); arcsin
+    # of the y-component gives wrong sign when w<0. Canonicalize first.
+    w_neg = r_velocity[..., 0] < 0
+    r_velocity[w_neg] = -r_velocity[w_neg]
     r_velocity = np.arcsin(r_velocity[:, 2:3])
     l_velocity = velocity[:, [0, 2]]
     #     print(r_velocity.shape, l_velocity.shape, root_y.shape)
