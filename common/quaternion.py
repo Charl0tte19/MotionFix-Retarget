@@ -27,13 +27,28 @@ def qinv_np(q):
 
 def qnormalize(q):
     assert q.shape[-1] == 4, 'q must be a tensor of shape (*, 4)'
-    # v2-bugfix B8: add _FLOAT_EPS to denominator to avoid divide-by-zero on
-    # zero-magnitude quaternions. Without this, degenerate root rotations
-    # (e.g. KIT/9/RightTurn10 first 85 frames) produce NaN-polluted feature
-    # vectors that propagate into Mean/Std and any downstream consumer.
-    # Ref: GitHub issue EricGuo5513/HumanML3D#44 (fix proposed but never merged
-    # upstream). Spec §7 Q4 / B8.
-    return q / (torch.norm(q, dim=-1, keepdim=True) + _FLOAT_EPS)
+    # v2-bugfix B8 (2026-05-26 revision): map zero-magnitude quaternions to
+    # the identity rotation [1,0,0,0]. The previous +eps-only fix saved
+    # qnormalize itself from divide-by-zero, but the resulting [0,0,0,0]
+    # propagated into quaternion_to_matrix (two_s = 2/0 = inf → inf*0 = NaN)
+    # and re-poisoned every downstream consumer.
+    #
+    # Root cause: qbetween(v0, v1) with EXACTLY anti-parallel unit vectors
+    # produces [0,0,0,0] (cross=0, sqrt(...)+dot=0). Empirically this is a
+    # binary failure: norm is either 0 or 1, no near-zero gradient region
+    # (verified in /tmp/check_007975_quat_norm.py). Threshold 1e-12 gives
+    # small float-jitter tolerance without affecting any healthy quaternion.
+    #
+    # Semantically: a zero quaternion has no defined rotation; identity is
+    # the canonical "no rotation" and the only well-defined fallback.
+    #
+    # Ref: GitHub issue EricGuo5513/HumanML3D#44 (upstream fix was incomplete).
+    # Spec §7 Q4 / B8.
+    norm = torch.norm(q, dim=-1, keepdim=True)
+    identity = torch.zeros_like(q)
+    identity[..., 0] = 1.0
+    is_degenerate = (norm < 1e-12)
+    return torch.where(is_degenerate, identity, q / (norm + _FLOAT_EPS))
 
 
 def qmul(q, r):
