@@ -27,7 +27,13 @@ def qinv_np(q):
 
 def qnormalize(q):
     assert q.shape[-1] == 4, 'q must be a tensor of shape (*, 4)'
-    return q / torch.norm(q, dim=-1, keepdim=True)
+    # v2-bugfix B8: add _FLOAT_EPS to denominator to avoid divide-by-zero on
+    # zero-magnitude quaternions. Without this, degenerate root rotations
+    # (e.g. KIT/9/RightTurn10 first 85 frames) produce NaN-polluted feature
+    # vectors that propagate into Mean/Std and any downstream consumer.
+    # Ref: GitHub issue EricGuo5513/HumanML3D#44 (fix proposed but never merged
+    # upstream). Spec §7 Q4 / B8.
+    return q / (torch.norm(q, dim=-1, keepdim=True) + _FLOAT_EPS)
 
 
 def qmul(q, r):
